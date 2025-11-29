@@ -91,6 +91,70 @@ const mapDbCollectionToCollection = (col: any): Collection => ({
   updatedAt: col.updated_at,
 });
 
+// --- Security: Rate Limiter ---
+const rateLimit = new Map<string, { count: number, lastReset: number }>();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const MAX_REQUESTS = 100; // 100 requests per minute
+
+const checkRateLimit = (headers: Headers) => {
+  // Get IP from Render/Cloudflare headers or fallback
+  const ip = headers.get('cf-connecting-ip') ||
+    headers.get('x-forwarded-for') ||
+    'unknown';
+
+  const now = Date.now();
+  const record = rateLimit.get(ip) || { count: 0, lastReset: now };
+
+  if (now - record.lastReset > RATE_LIMIT_WINDOW) {
+    record.count = 0;
+    record.lastReset = now;
+  }
+
+  record.count++;
+  rateLimit.set(ip, record);
+
+  if (record.count > MAX_REQUESTS) {
+    console.warn(`Rate limit exceeded for IP: ${ip}`);
+    throw new Error("Security Alert: Too many requests. Please try again later.");
+  }
+};
+
+// --- Security: Input Sanitization ---
+const sanitizeInput = (str: string) => {
+  if (typeof str !== 'string') return str;
+  // Remove potential script tags and dangerous characters
+  return str
+    .replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gm, "")
+    .replace(/[<>'"]/g, (tag) => {
+      const chars: Record<string, string> = {
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;'
+      };
+      return chars[tag] || tag;
+    });
+};
+
+// --- Auth Helper (Enhanced) ---
+const verifyAuth = async (headers: Record<string, string | undefined>) => {
+  const authHeader = headers['authorization'] || headers['Authorization'];
+  if (!authHeader) throw new Error('Unauthorized: Missing token');
+
+  const token = authHeader.replace('Bearer ', '');
+
+  // 1. Verify Token Integrity
+  if (!token || token.split('.').length !== 3) {
+    throw new Error('Security Alert: Malformed token detected');
+  }
+
+  // 2. Verify with Supabase
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+
+  if (error || !user) throw new Error('Unauthorized: Invalid token');
+  return user;
+};
+
 // --- Server ---
 
 const app = new Elysia()
@@ -98,12 +162,18 @@ const app = new Elysia()
     origin: [
       "http://localhost:3000",
       "http://localhost:3001",
+      "https://nbfhomes.com",
+      "https://www.nbfhomes.com",
       "https://www.nbfhomes.in"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "x-admin-user-id"],
     credentials: true
   }))
+  // Global Security Middleware
+  .onBeforeHandle(({ request }) => {
+    checkRateLimit(request.headers);
+  })
 
   // 1. Get All Products (Properties) - Support both GET and POST
   .get("/products", async () => {
@@ -247,24 +317,29 @@ const app = new Elysia()
   })
 
   // 7. Create Product (Post Property)
-  .post("/products/create", async ({ body }) => {
+  .post("/products/create", async ({ body, headers }) => {
+    const user = await verifyAuth(headers);
     console.log('POST /products/create body:', body);
-    const { title, description, price, address, location, type, imageUrl, userId, contactNumber } = body as any;
+    const { title, description, price, address, location, type, imageUrl, contactNumber } = body as any;
 
-    const handle = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    // Sanitize inputs
+    const cleanTitle = sanitizeInput(title);
+    const cleanDescription = sanitizeInput(description);
+
+    const handle = cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const id = `prop_${Date.now()}`;
 
     const newProperty = {
       id,
       handle,
-      title,
-      description,
+      title: cleanTitle,
+      description: cleanDescription,
       category_id: address,
       currency_code: "INR",
-      seo: { title, description },
+      seo: { title: cleanTitle, description: cleanDescription },
       featured_image: {
         url: imageUrl,
-        altText: title,
+        altText: cleanTitle,
         width: 800,
         height: 600,
       },
@@ -292,7 +367,7 @@ const app = new Elysia()
         minVariantPrice: { amount: price, currencyCode: "INR" },
         maxVariantPrice: { amount: price, currencyCode: "INR" },
       },
-      user_id: userId,
+      user_id: user.id, // Use authenticated user ID
       contact_number: contactNumber
     };
 
@@ -311,16 +386,21 @@ const app = new Elysia()
   })
 
   // 8. Update Product (Edit Property)
-  .put("/products/:id", async ({ params: { id }, body }) => {
+  .put("/products/:id", async ({ params: { id }, body, headers }) => {
+    const user = await verifyAuth(headers);
     const { title, description, price, address, location, type, imageUrl, contactNumber } = body as any;
 
+    // Sanitize inputs
+    const cleanTitle = sanitizeInput(title);
+    const cleanDescription = sanitizeInput(description);
+
     const updates: any = {
-      title,
-      description,
+      title: cleanTitle,
+      description: cleanDescription,
       category_id: address,
       featured_image: {
         url: imageUrl,
-        altText: title,
+        altText: cleanTitle,
         width: 800,
         height: 600,
       },
@@ -350,21 +430,26 @@ const app = new Elysia()
       .from("properties")
       .update(updates)
       .eq("id", id)
+      .eq("user_id", user.id) // Ensure ownership
       .select()
       .single();
 
     if (error) throw error;
+    if (!data) throw new Error("Property not found or unauthorized");
     return mapPropertyToProduct(data);
   })
 
   // 9. Delete Product (Delete Property)
-  .delete("/products/:id", async ({ params: { id } }) => {
-    const { error } = await supabase
+  .delete("/products/:id", async ({ params: { id }, headers }) => {
+    const user = await verifyAuth(headers);
+    const { error, count } = await supabase
       .from("properties")
-      .delete()
-      .eq("id", id);
+      .delete({ count: 'exact' })
+      .eq("id", id)
+      .eq("user_id", user.id); // Ensure ownership
 
     if (error) throw error;
+    if (count === 0) throw new Error("Property not found or unauthorized");
     return { success: true, message: "Property deleted" };
   })
 
