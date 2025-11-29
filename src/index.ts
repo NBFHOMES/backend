@@ -94,7 +94,16 @@ const mapDbCollectionToCollection = (col: any): Collection => ({
 // --- Server ---
 
 const app = new Elysia()
-  .use(cors())
+  .use(cors({
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "https://www.nbfhomes.in"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-admin-user-id"],
+    credentials: true
+  }))
 
   // 1. Get All Products (Properties) - Support both GET and POST
   .get("/products", async () => {
