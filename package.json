@@ -9,7 +9,8 @@
   "dependencies": {
     "@elysiajs/cors": "^1.2.0",
     "@supabase/supabase-js": "^2.47.10",
-    "elysia": "^1.2.9"
+    "elysia": "^1.2.9",
+    "posthog-node": "^5.14.1"
   },
   "devDependencies": {
     "bun-types": "latest"
