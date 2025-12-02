@@ -1,0 +1,15 @@
+# railway.yaml
+build:
+  builder: "BUN"
+
+deploy:
+  startCommand: "bun run start"
+  restartPolicyType: "ON_FAILURE"
+
+services:
+  backend:
+    autoDeploy: true
+    numInstances: 1
+    env:
+      SUPABASE_URL: "{{ SUPABASE_URL }}"
+      SUPABASE_ANON_KEY: "{{ SUPABASE_ANON_KEY }}"
