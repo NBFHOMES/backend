@@ -3,8 +3,12 @@ import { cors } from "@elysiajs/cors";
 import { createClient } from "@supabase/supabase-js";
 
 // --- Supabase Setup ---
-const SUPABASE_URL = "https://ndoafecuiyxxybynwanf.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5kb2FmZWN1aXl4eHlieW53YW5mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQzMjI3NjcsImV4cCI6MjA3OTg5ODc2N30.X4fXt3ZoSCXi_Caf0LlJlreZjniVFWjKxTZ0214Lky8";
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error('Missing Supabase credentials');
+}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
